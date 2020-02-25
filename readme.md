@@ -12,6 +12,10 @@ The ARM template also deploys a storage account with [Azure Files][6] that is us
 
 ![Azure Resources](architecture.png)
 
+## Cloud-init
+
+The Unifi set-up is all done through a relatively straight forward cloud-init script. The ARM template constructs the clout-init adding in the storage details for the shared files. This means it is stored in a pretty horrible single-line `concat()` statement. To see what the script looks like it's formatted properly in [cloud-init](./cloudinit.md)
+
 ## Manual Steps
 
 The ARM template will set up the Azure resources and Unifi controller software, but there are a few manual steps that will still need to be performed.
@@ -37,6 +41,14 @@ If you intend to migrate you set up from a backup then you can copy the backup f
 ## Known Issues
 
   1. On first deployment the Unifi web endpoint fails to negociate an SSL connection. Restarting the VM seems to fix this.
+  
+  > The connection for this site is not secure
+  >
+  > *ip-address* uses an unsupported protocol.
+  >
+  > `ERR_SSL_VERSION_OR_CIPHER_MISMATCH`
+
+
 
 
 [1]: https://unifi-network.ui.com/ "Ubiquiti Unifi"
