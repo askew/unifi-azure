@@ -36,9 +36,7 @@ If you intend to migrate you set up from a backup then you can copy the backup f
 
 ## Known Issues
 
-  1. The Deploy to Azure button fails to load the template. I'm trying to find out why, as it's fine deploying with the Azure CLI or Azure PowerShell.
-
-  2. On first deployment the Unifi web endpoint fails to negociate an SSL connection. Restarting the VM seems to fix this.
+  1. On first deployment the Unifi web endpoint fails to negociate an SSL connection. Restarting the VM seems to fix this.
 
 
 [1]: https://unifi-network.ui.com/ "Ubiquiti Unifi"
