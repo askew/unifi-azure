@@ -62,6 +62,13 @@
             "metadata": {
                 "description": "Public IP address of the home network. The NSG will restrict access to this IP."
             }
+        },
+        "sshNatPort": {
+            "type": "int",
+            "metadata": {
+                "description": "The port number to expose for SSH access to the VM. Will be NAT'd to 22."
+            },
+            "defaultValue": 22
         }
     },
     "variables": {
@@ -187,7 +194,7 @@
                         "name": "ssh1",
                         "properties": {
                             "backendPort": 22,
-                            "frontendPort": 50001,
+                            "frontendPort": "[parameters('sshNatPort')]",
                             "frontendIPConfiguration": {
                                 "id": "[resourceId('Microsoft.Network/loadBalancers/frontendIPConfigurations', variables('lbName'), 'PublicEndpoint')]"
                             },
