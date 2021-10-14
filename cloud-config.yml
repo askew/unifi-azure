@@ -1,0 +1,51 @@
+#cloud-config
+
+timezone: Europe/London
+
+apt:
+  sources:
+    100-ubnt-unifi:
+      keyid: 06E85760C0A52C50
+      keyserver: keyserver.ubuntu.com
+      source: "deb https://www.ui.com/downloads/unifi/debian stable ubiquiti"
+    mongodb-org-3.6:
+      keyid: 58712A2291FA4AD5
+      source: "deb [arch=amd64] https://repo.mongodb.org/apt/ubuntu bionic/mongodb-org/3.6 multiverse"
+
+packages:
+- apt-transport-https
+- binutils
+- ca-certificates
+- ca-certificates-java
+- java-common
+- jsvc
+- libcommons-daemon-java
+- mongodb-org-server
+- openjdk-8-jre-headless
+- unifi
+
+package_update: true
+package_upgrade: true
+package_reboot_if_required: true
+
+write_files:
+- encoding: gzip
+  content: !!binary |
+    SETUPSCRIPT
+  owner: root:root
+  path: /root/unifi-setup.sh
+  permissions: '0744'
+- path: /root/.smbcreds
+  owner: root:root
+  permissions: '0600'
+  content: |
+    username={0}
+    password={1}
+
+bootcmd:
+- if [ ! -d '/azure' ]; then mkdir /azure; fi
+runcmd:
+- [ bash, /root/unifi-setup.sh ]
+
+mounts:
+- {2}

@@ -1,561 +1,549 @@
 {
-    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.0.0.0",
-    "parameters": {
-        "vmName": {
-            "type": "string"
-        },
-        "vmSize": {
-            "type": "string",
-            "allowedValues": [
-                "Standard_B1s",
-                "Standard_B1ms",
-                "Standard_B2s",
-                "Standard_B2ms",
-                "Standard_F2s"
-            ],
-            "defaultValue": "Standard_B1ms"
-        },
-        "virtualNetworkName": {
-            "type": "string",
-            "metadata": {
-                "description": "The name for the virtual network."
-            },
-            "defaultValue": "UnifiVNet"
-        },
-        "addressSpace": {
-            "type": "string",
-            "metadata": {
-                "description": "The IPv4 address space of the virtual network."
-            },
-            "defaultValue": "10.0.0.0/24"
-        },
-        "subnetName": {
-            "type": "string",
-            "metadata": {
-                "description": "The name of the sub-net where the Unifi controller VM will be deployed."
-            },
-            "defaultValue": "unifi"
-        },
-        "adminUsername": {
-            "type": "string",
-            "metadata": {
-                "description": "The default admin username for the VM."
-            },
-            "defaultValue": "azureuser"
-        },
-        "adminPublicKey": {
-            "type": "string",
-            "metadata": {
-                "description": "The public SSH key used for admin login on the VM."
-            }
-        },
-        "backupStgAcc": {
-            "type": "string",
-            "metadata": {
-                "description": "The storage account name used for the backups."
-            },
-            "defaultValue": ""
-        },
-        "homePublicIP": {
-            "type": "string",
-            "metadata": {
-                "description": "Public IP address of the home network. The NSG will restrict access to this IP."
-            }
-        },
-        "sshNatPort": {
-            "type": "int",
-            "metadata": {
-                "description": "The port number to expose for SSH access to the VM. Will be NAT'd to 22."
-            },
-            "defaultValue": 22
-        }
-    },
-    "variables": {
-        "location": "[resourceGroup().location]",
-        "CidrParts": "[split(parameters('addressSpace'), '/')]",
-        "AddressSpaceParts": "[split(variables('CidrParts')[0], '.')]",
-        "AddressPrefix24": "[concat(variables('AddressSpaceParts')[0], '.', variables('AddressSpaceParts')[1], '.', variables('AddressSpaceParts')[2], '.')]",
-        "subnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('virtualNetworkName'), parameters('subnetName'))]",
-        "networkInterfaceName": "[concat(parameters('vmName'), '-nic')]",
-        "availabilitySetName": "[concat(parameters('vmName'), '-as')]",
-        "diagnosticsStorageAccountName": "[concat('diag', uniqueString(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))))]",
-        "backupStgAcc": "[if(empty(parameters('backupStgAcc')), concat('backup', uniqueString(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')))), parameters('backupStgAcc'))]",
-        "pipName": "[concat(parameters('vmName'), '-pip')]",
-        "lbName": "[concat(parameters('vmName'), '-lb')]",
-        "nsgName": "[concat(parameters('vmName'), '-nsg')]",
-        "mountFields": [
-            "[concat('//',variables('backupStgAcc'),'.file.core.windows.net/backup')]",
-            "/azure",
-            "cifs",
-            "vers=3.0,credentials=/root/.smbcreds,dir_mode=0777,file_mode=0777,sec=ntlmssp",
-            "0",
-            "0"
-        ],
-        "cloudInit": "[concat('#cloud-config\n', '\n', 'timezone: Europe/London\n', '\n', 'apt:\n', '  sources:\n', '    100-ubnt-unifi:\n', '      keyid: 06E85760C0A52C50 \n', '      keyserver: keyserver.ubuntu.com\n', '      source: \"deb https://www.ui.com/downloads/unifi/debian stable ubiquiti\"\n', '    mongodb-org-3.4:\n', '      keyid: 0C49F3730359A14518585931BC711F9BA15703C6\n', '      source: \"deb https://repo.mongodb.org/apt/ubuntu xenial/mongodb-org/3.4 multiverse\"\n', '\n', 'packages:\n', '- ca-certificates\n', '- apt-transport-https\n', '- openjdk-8-jdk-headless\n', '- mongodb-org-server\n', '- binutils\n', '- ca-certificates-java\n', '- java-common\n', '- jsvc\n', '- libcommons-daemon-java\n', '- unifi\n', 'package_update: true\n', 'package_upgrade: true\n', 'package_reboot_if_required: true\n', '\n', 'bootcmd:\n', '- if [ ! -d ''/azure'' ]; then mkdir /azure; fi\n', 'runcmd:\n', '- |\n', '  if [ ! -d ''/azure/autobackup'' ]; then \n', '    mkdir /azure/autobackup \n', '  fi\n', '  if [ ! -L ''/var/lib/unifi/backup'' -a -d ''/var/lib/unifi/backup'' ]; then \n', '    rm -rf /var/lib/unifi/backup \n', '    cd /var/lib/unifi/ \n', '    ln -s /azure backup \n', '    chown -h unifi:unifi backup \n', '  fi\n', '\n', 'write_files:\n', '- path: /root/.smbcreds\n', '  owner: root:root\n', '  permissions: ''0600''\n', '  content: |\n', '    username=', variables('backupStgAcc'), '\n', '    password=STORAGEKEY\n\n', 'mounts:\n', '- ', string(variables('mountFields')), '\n' )]"
-    },
-    "resources": [
-        {
-            "name": "[variables('pipName')]",
-            "type": "Microsoft.Network/publicIPAddresses",
-            "apiVersion": "2019-09-01",
-            "location": "[variables('location')]",
-            "properties": {
-                "publicIPAllocationMethod": "Static"
-            },
-            "sku": {
-                "name": "Standard"
-            }
-        },
-        {
-            "name": "[variables('lbName')]",
-            "type": "Microsoft.Network/loadBalancers",
-            "apiVersion": "2019-09-01",
-            "location": "[variables('location')]",
-            "dependsOn": [
-                "[concat('Microsoft.Network/publicIPAddresses/', variables('pipName'))]"
-            ],
-            "tags": {
-            },
-            "sku": {
-                "name": "Standard"
-            },
-            "properties": {
-                "frontendIPConfigurations": [
-                    {
-                        "name": "PublicEndpoint",
-                        "properties": {
-                            "publicIPAddress": {
-                                "id": "[resourceId('Microsoft.Network/publicIPAddresses',variables('pipName'))]"
-                            }
-                        }
-                    }
-                ],
-                "backendAddressPools": [
-                    {
-                        "name": "unificntr"
-                    }
-                ],
-                "inboundNatRules": [
-                    {
-                        "name": "ssh1",
-                        "properties": {
-                            "backendPort": 22,
-                            "frontendPort": "[parameters('sshNatPort')]",
-                            "frontendIPConfiguration": {
-                                "id": "[resourceId('Microsoft.Network/loadBalancers/frontendIPConfigurations', variables('lbName'), 'PublicEndpoint')]"
-                            },
-                            "enableFloatingIP": false,
-                            "protocol": "Tcp"
-                        }
-                    }
-                ],
-                "loadBalancingRules": [
-                    {
-                        "name": "ubntui",
-                        "properties": {
-                            "frontendIPConfiguration": {
-                                "id": "[resourceId('Microsoft.Network/loadBalancers/frontendIPConfigurations', variables('lbName'), 'PublicEndpoint')]"
-                            },
-                            "frontendPort": 8443,
-                            "backendAddressPool": {
-                                "id": "[resourceId('Microsoft.Network/loadBalancers/backendAddressPools', variables('lbName'), 'unificntr')]"
-                            },
-                            "backendPort": 8443,
-                            "protocol": "Tcp",
-                            "probe": {
-                                "id": "[resourceId('Microsoft.Network/loadBalancers/probes', variables('lbName'), 'inform')]"
-                            },
-                            "enableFloatingIP": false
-                        }
-                    },
-                    {
-                        "name": "inform",
-                        "properties": {
-                            "frontendIPConfiguration": {
-                                "id": "[resourceId('Microsoft.Network/loadBalancers/frontendIPConfigurations', variables('lbName'), 'PublicEndpoint')]"
-                            },
-                            "frontendPort": 8080,
-                            "backendAddressPool": {
-                                "id": "[resourceId('Microsoft.Network/loadBalancers/backendAddressPools', variables('lbName'), 'unificntr')]"
-                            },
-                            "backendPort": 8080,
-                            "protocol": "Tcp",
-                            "probe": {
-                                "id": "[resourceId('Microsoft.Network/loadBalancers/probes', variables('lbName'), 'inform')]"
-                            },
-                            "enableFloatingIP": false
-                        }
-                    }
-                ],
-                "probes": [
-                    {
-                        "name": "inform",
-                        "properties": {
-                            "protocol": "Tcp",
-                            "port": 8080,
-                            "intervalInSeconds": 15,
-                            "numberOfProbes": 3
-                        }
-                    }
-                ]
-            }
-        },
-        {
-            "name": "[variables('nsgName')]",
-            "type": "Microsoft.Network/networkSecurityGroups",
-            "apiVersion": "2019-09-01",
-            "location": "[variables('location')]",
-            "properties": {
-                "securityRules": [
-                    {
-                        "name": "Allow-ssh",
-                        "properties": {
-                            "priority": 110,
-                            "protocol": "Tcp",
-                            "access": "Allow",
-                            "direction": "Inbound",
-                            "sourceAddressPrefix": "[parameters('homePublicIP')]",
-                            "sourcePortRange": "*",
-                            "destinationAddressPrefix": "VirtualNetwork",
-                            "destinationPortRange": "22"
-                        }
-                    },
-                    {
-                        "name": "Allow-inform-home",
-                        "properties": {
-                            "priority": 120,
-                            "protocol": "Tcp",
-                            "access": "Allow",
-                            "direction": "Inbound",
-                            "sourceAddressPrefix": "[parameters('homePublicIP')]",
-                            "sourcePortRange": "*",
-                            "destinationAddressPrefix": "VirtualNetwork",
-                            "destinationPortRange": "8080"
-                        }
-                    },
-                    {
-                        "name": "Allow-inform-lb",
-                        "properties": {
-                            "priority": 130,
-                            "protocol": "Tcp",
-                            "access": "Allow",
-                            "direction": "Inbound",
-                            "sourceAddressPrefix": "AzureLoadBalancer",
-                            "sourcePortRange": "*",
-                            "destinationAddressPrefix": "VirtualNetwork",
-                            "destinationPortRange": "8080"
-                        }
-                    },
-                    {
-                        "name": "Allow-ubntui-home",
-                        "properties": {
-                            "priority": 140,
-                            "protocol": "Tcp",
-                            "access": "Allow",
-                            "direction": "Inbound",
-                            "sourceAddressPrefix": "[parameters('homePublicIP')]",
-                            "sourcePortRange": "*",
-                            "destinationAddressPrefix": "VirtualNetwork",
-                            "destinationPortRange": "8443"
-                        }
-                    },
-                    {
-                        "name": "Allow-ubntui-lb",
-                        "properties": {
-                            "priority": 150,
-                            "protocol": "Tcp",
-                            "access": "Allow",
-                            "direction": "Inbound",
-                            "sourceAddressPrefix": "AzureLoadBalancer",
-                            "sourcePortRange": "*",
-                            "destinationAddressPrefix": "VirtualNetwork",
-                            "destinationPortRange": "8443"
-                        }
-                    },
-                    {
-                        "name": "Allow-http-redirect",
-                        "properties": {
-                            "priority": 160,
-                            "protocol": "Tcp",
-                            "access": "Allow",
-                            "direction": "Inbound",
-                            "sourceAddressPrefix": "[parameters('homePublicIP')]",
-                            "sourcePortRange": "*",
-                            "destinationAddressPrefix": "VirtualNetwork",
-                            "destinationPortRange": "8880"
-                        }
-                    },
-                    {
-                        "name": "Allow-https-redirect",
-                        "properties": {
-                            "priority": 170,
-                            "protocol": "Tcp",
-                            "access": "Allow",
-                            "direction": "Inbound",
-                            "sourceAddressPrefix": "[parameters('homePublicIP')]",
-                            "sourcePortRange": "*",
-                            "destinationAddressPrefix": "VirtualNetwork",
-                            "destinationPortRange": "8843"
-                        }
-                    },
-                    {
-                        "name": "Allow-mobile-speedtest",
-                        "properties": {
-                            "priority": 180,
-                            "protocol": "Tcp",
-                            "access": "Allow",
-                            "direction": "Inbound",
-                            "sourceAddressPrefix": "[parameters('homePublicIP')]",
-                            "sourcePortRange": "*",
-                            "destinationAddressPrefix": "VirtualNetwork",
-                            "destinationPortRange": "6789"
-                        }
-                    },
-                    {
-                        "name": "Allow-stun",
-                        "properties": {
-                            "priority": 190,
-                            "protocol": "Udp",
-                            "access": "Allow",
-                            "direction": "Inbound",
-                            "sourceAddressPrefix": "[parameters('homePublicIP')]",
-                            "sourcePortRange": "*",
-                            "destinationAddressPrefix": "VirtualNetwork",
-                            "destinationPortRange": "3478"
-                        }
-                    }
-                ]
-            }
-        },
-        {
-            "type": "Microsoft.Network/virtualNetworks",
-            "name": "[parameters('virtualNetworkName')]",
-            "location": "[variables('location')]",
-            "apiVersion": "2019-09-01",
-            "dependsOn": [
-                "[concat('Microsoft.Network/networkSecurityGroups/', variables('nsgName'))]"
-            ],
-            "properties": {
-                "addressSpace": {
-                    "addressPrefixes": [
-                        "[parameters('addressSpace')]"
-                    ]
-                },
-                "subnets": [
-                    {
-                        "name": "[parameters('subnetName')]",
-                        "properties": {
-                            "addressPrefix": "[concat(variables('AddressPrefix24'), '0/25')]",
-                            "networkSecurityGroup": {
-                                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
-                            },
-                            "serviceEndpoints": [
-                            ]
-                        }
-                    }
-                ]
-            }
-        },
-        {
-            "name": "[variables('networkInterfaceName')]",
-            "type": "Microsoft.Network/networkInterfaces",
-            "apiVersion": "2019-09-01",
-            "location": "[variables('location')]",
-            "dependsOn": [
-                "[concat('Microsoft.Network/virtualNetworks/', parameters('virtualNetworkName'))]",
-                "[concat('Microsoft.Network/networkSecurityGroups/', variables('nsgName'))]",
-                "[concat('Microsoft.Network/loadBalancers/', variables('lbName'))]"
-            ],
-            "properties": {
-                "ipConfigurations": [
-                    {
-                        "name": "ipconfig1",
-                        "properties": {
-                            "subnet": {
-                                "id": "[variables('subnetId')]"
-                            },
-                            "loadBalancerBackendAddressPools": [
-                                {
-                                    "id": "[resourceId('Microsoft.Network/loadBalancers/backendAddressPools', variables('lbName'), 'unificntr')]"
-                                }
-                            ],
-                            "loadBalancerInboundNatRules": [
-                                {
-                                    "id": "[resourceId('Microsoft.Network/loadBalancers/inboundNatRules', variables('lbName'), 'ssh1')]"
-                                }
-                            ],
-                            "privateIPAllocationMethod": "Dynamic"
-                        }
-                    }
-                ],
-                "networkSecurityGroup": {
-                    "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
-                }
-            }
-        },
-        {
-            "name": "[variables('availabilitySetName')]",
-            "type": "Microsoft.Compute/availabilitySets",
-            "apiVersion": "2019-07-01",
-            "location": "[variables('location')]",
-            "sku": {
-                "name": "Aligned"
-            },
-            "properties": {
-                "platformFaultDomainCount": 2,
-                "platformUpdateDomainCount": 5
-            }
-        },
-        {
-            "name": "[variables('diagnosticsStorageAccountName')]",
-            "type": "Microsoft.Storage/storageAccounts",
-            "apiVersion": "2019-06-01",
-            "location": "[variables('location')]",
-            "sku": {
-                "name": "Standard_LRS"
-            },
-            "kind": "StorageV2",
-            "properties": {
-                "supportsHttpsTrafficOnly": true,
-                "accessTier": "Hot",
-                "encryption": {
-                    "services": {
-                        "blob": {
-                            "enabled": true
-                        },
-                        "file": {
-                            "enabled": true
-                        }
-                    },
-                    "keySource": "Microsoft.Storage"
-                }
-            }
-        },
-        {
-            "name": "[variables('backupStgAcc')]",
-            "type": "Microsoft.Storage/storageAccounts",
-            "apiVersion": "2019-06-01",
-            "location": "[variables('location')]",
-            "sku": {
-                "name": "Standard_LRS"
-            },
-            "kind": "StorageV2",
-            "properties": {
-                "supportsHttpsTrafficOnly": true,
-                "accessTier": "Cool",
-                "encryption": {
-                    "services": {
-                        "blob": {
-                            "enabled": true
-                        },
-                        "file": {
-                            "enabled": true
-                        }
-                    },
-                    "keySource": "Microsoft.Storage"
-                }
-            },
-            "resources": [
-                {
-                    "name": "default",
-                    "type": "fileServices",
-                    "apiVersion": "2019-06-01",
-                    "dependsOn": [
-                        "[concat('Microsoft.Storage/storageAccounts/', variables('backupStgAcc'))]"
-                    ],
-                    "properties": {
-                        "cors": {
-                            "corsRules": []
-                        }
-                    },
-                    "resources": [
-                        {
-                            "name": "backup",
-                            "type": "shares",
-                            "apiVersion": "2019-06-01",
-                            "dependsOn": [
-                                "[concat('Microsoft.Storage/storageAccounts/', variables('backupStgAcc'), '/fileServices/default')]"
-                            ],
-                            "properties": {
-                                "metadata": {
-                                },
-                                "shareQuota": 5120
-                            }
-                        }
-                    ]
-                }
-            ]
-        },
-        {
-            "name": "[parameters('vmName')]",
-            "type": "Microsoft.Compute/virtualMachines",
-            "apiVersion": "2019-07-01",
-            "location": "[variables('location')]",
-            "dependsOn": [
-                "[concat('Microsoft.Network/networkInterfaces/', variables('networkInterfaceName'))]",
-                "[concat('Microsoft.Compute/availabilitySets/', variables('availabilitySetName'))]",
-                "[concat('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
-                "[concat('Microsoft.Storage/storageAccounts/', variables('backupStgAcc'), '/fileServices/default/shares/backup')]"
-            ],
-            "properties": {
-                "osProfile": {
-                    "computerName": "[parameters('vmName')]",
-                    "adminUsername": "[parameters('adminUsername')]",
-                    "linuxConfiguration": {
-                        "disablePasswordAuthentication": true,
-                        "ssh": {
-                            "publicKeys": [
-                                {
-                                    "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
-                                    "keyData": "[parameters('adminPublicKey')]"
-                                }
-                            ]
-                        }
-                    },
-                    "customData": "[base64(replace(variables('cloudInit'), 'STORAGEKEY', listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('backupStgAcc')), '2019-06-01').keys[0].value))]"
-                },
-                "hardwareProfile": {
-                    "vmSize": "[parameters('vmSize')]"
-                },
-                "storageProfile": {
-                    "imageReference": {
-                        "publisher": "Canonical",
-                        "offer": "UbuntuServer",
-                        "sku": "18.04-LTS",
-                        "version": "latest"
-                    },
-                    "osDisk": {
-                        "createOption": "FromImage",
-                        "managedDisk": {
-                            "storageAccountType": "Premium_LRS"
-                        },
-                        "diskSizeGB": 32
-                    }
-                },
-                "networkProfile": {
-                    "networkInterfaces": [
-                        {
-                            "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('networkInterfaceName'))]"
-                        }
-                    ]
-                },
-                "diagnosticsProfile": {
-                    "bootDiagnostics": {
-                        "enabled": true,
-                        "storageUri": "[reference(resourceId('Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2018-02-01').primaryEndpoints['blob']]"
-                    }
-                },
-                "availabilitySet": {
-                    "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('availabilitySetName'))]"
-                }
-            }
-        }
-    ],
-    "outputs": {
-        "unifiUrl": {
-            "type": "string",
-            "value": "[concat('https://', reference(resourceId('Microsoft.Network/publicIPAddresses', variables('pipName')), '2019-09-01').ipAddress, ':8443')]"
-        }
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.4.993.34462",
+      "templateHash": "9954783919761997680"
     }
+  },
+  "parameters": {
+    "vmName": {
+      "type": "string"
+    },
+    "vmSize": {
+      "type": "string",
+      "defaultValue": "Standard_B1ms",
+      "allowedValues": [
+        "Standard_B1s",
+        "Standard_B1ms",
+        "Standard_B2s",
+        "Standard_B2ms",
+        "Standard_F2s"
+      ],
+      "metadata": {
+        "description": ""
+      }
+    },
+    "virtualNetworkName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name for the virtual network."
+      }
+    },
+    "addressSpace": {
+      "type": "string",
+      "defaultValue": "10.0.0.0/24",
+      "metadata": {
+        "description": "The IPv4 address space of the virtual network."
+      }
+    },
+    "backupStorageAccountName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "The storage account name used for the backups. (leave empty for automatic name)"
+      }
+    },
+    "adminUsername": {
+      "type": "string",
+      "defaultValue": "azureuser",
+      "metadata": {
+        "description": "The admin username for the VM."
+      }
+    },
+    "adminPublicKey": {
+      "type": "string",
+      "metadata": {
+        "description": "The public SSH key used for admin login on the VM."
+      }
+    },
+    "homePublicIP": {
+      "type": "string",
+      "metadata": {
+        "description": "Public IP address of the home network. The NSG will restrict access to this IP."
+      }
+    },
+    "sshNatPort": {
+      "type": "int",
+      "defaultValue": 22,
+      "metadata": {
+        "description": "The port number to expose for SSH access to the VM. Will be NAT'd to 22."
+      }
+    }
+  },
+  "functions": [],
+  "variables": {
+    "location": "[resourceGroup().location]",
+    "suffix": "[take(uniqueString(resourceGroup().id), 4)]",
+    "computerName": "[toUpper(parameters('vmName'))]",
+    "cidrParts": "[split(parameters('addressSpace'), '/')]",
+    "addressSpaceParts": "[split(variables('cidrParts')[0], '.')]",
+    "addressPrefix24": "[format('{0}.{1}.{2}', variables('addressSpaceParts')[0], variables('addressSpaceParts')[1], variables('addressSpaceParts')[2])]",
+    "subnetName": "unifi",
+    "networkInterfaceName": "[format('{0}-nic', parameters('vmName'))]",
+    "availabilitySetName": "[format('{0}-as', parameters('vmName'))]",
+    "diagnosticsStorageAccountName": "[format('diag{0}', variables('suffix'))]",
+    "backupStgAcc": "[if(empty(parameters('backupStorageAccountName')), format('backup{0}', variables('suffix')), parameters('backupStorageAccountName'))]",
+    "pipName": "[format('{0}-pip', parameters('vmName'))]",
+    "lbName": "[format('{0}-lb', parameters('vmName'))]",
+    "mountFields": [
+      "[format('//{0}.file.{1}/backup', variables('backupStgAcc'), environment().suffixes.storage)]",
+      "/azure",
+      "cifs",
+      "vers=3.0,credentials=/root/.smbcreds,dir_mode=0777,file_mode=0777,sec=ntlmssp",
+      "0",
+      "0"
+    ],
+    "cloudInitFormat": "#cloud-config\n\ntimezone: Europe/London\n\napt:\n  sources:\n    100-ubnt-unifi:\n      keyid: 06E85760C0A52C50\n      keyserver: keyserver.ubuntu.com\n      source: \"deb https://www.ui.com/downloads/unifi/debian stable ubiquiti\"\n    mongodb-org-3.6:\n      keyid: 58712A2291FA4AD5\n      source: \"deb [arch=amd64] https://repo.mongodb.org/apt/ubuntu bionic/mongodb-org/3.6 multiverse\"\n\npackages:\n- apt-transport-https\n- binutils\n- ca-certificates\n- ca-certificates-java\n- java-common\n- jsvc\n- libcommons-daemon-java\n- mongodb-org-server\n- openjdk-8-jre-headless\n- unifi\n\npackage_update: true\npackage_upgrade: true\npackage_reboot_if_required: true\n\nwrite_files:\n- encoding: gzip\n  content: !!binary |\n    H4sIAAAAAAAACm2OMQ6DMAxF95ziow5Mkff2Cr1B1cEhRLGAUAXSSj19owAVavHgwe/pf58qMhLI8OSVEocbKmiLmvidYkuc5tFw06VHjfsFs2+DQp6hsxLxJykn35BrDnlypF4MpSBOcskSpHmpOKb7mjhAR4dDswiN/YXl3AfoaX0Pe92Pr4w8insue+NOPjjUA8kMAQAA\n  owner: root:root\n  path: /root/unifi-setup.sh\n  permissions: '0744'\n- path: /root/.smbcreds\n  owner: root:root\n  permissions: '0600'\n  content: |\n    username={0}\n    password={1}\n\nbootcmd:\n- if [ ! -d '/azure' ]; then mkdir /azure; fi\nruncmd:\n- [ bash, /root/unifi-setup.sh ]\n\nmounts:\n- {2}",
+    "lbFrontEndRef": {
+      "id": "[resourceId('Microsoft.Network/loadBalancers/frontendIPConfigurations', variables('lbName'), 'PublicEndpoint')]"
+    },
+    "lbBackEndRef": {
+      "id": "[resourceId('Microsoft.Network/loadBalancers/backendAddressPools', variables('lbName'), 'unificntr')]"
+    },
+    "lbProbeRef": {
+      "id": "[resourceId('Microsoft.Network/loadBalancers/probes', variables('lbName'), 'inform')]"
+    },
+    "lbNatRuleRef": {
+      "id": "[resourceId('Microsoft.Network/loadBalancers/inboundNatRules', variables('lbName'), 'ssh')]"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+      "apiVersion": "2021-04-01",
+      "name": "[format('{0}/{1}/{2}', variables('backupStgAcc'), 'default', 'backup')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('backupStgAcc'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/fileServices', variables('backupStgAcc'), 'default')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/fileServices",
+      "apiVersion": "2021-04-01",
+      "name": "[format('{0}/{1}', variables('backupStgAcc'), 'default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('backupStgAcc'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2021-02-01",
+      "name": "Unifi-nsg",
+      "location": "[variables('location')]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "Allow-ssh",
+            "properties": {
+              "priority": 110,
+              "protocol": "Tcp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "[parameters('homePublicIP')]",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationPortRange": "22"
+            }
+          },
+          {
+            "name": "Allow-inform-home",
+            "properties": {
+              "priority": 120,
+              "protocol": "Tcp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "[parameters('homePublicIP')]",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationPortRange": "8080"
+            }
+          },
+          {
+            "name": "Allow-inform-lb",
+            "properties": {
+              "priority": 130,
+              "protocol": "Tcp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "AzureLoadBalancer",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationPortRange": "8080"
+            }
+          },
+          {
+            "name": "Allow-ubntui-home",
+            "properties": {
+              "priority": 140,
+              "protocol": "Tcp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "[parameters('homePublicIP')]",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationPortRange": "8443"
+            }
+          },
+          {
+            "name": "Allow-ubntui-lb",
+            "properties": {
+              "priority": 150,
+              "protocol": "Tcp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "AzureLoadBalancer",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationPortRange": "8443"
+            }
+          },
+          {
+            "name": "Allow-http-redirect",
+            "properties": {
+              "priority": 160,
+              "protocol": "Tcp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "[parameters('homePublicIP')]",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationPortRange": "8880"
+            }
+          },
+          {
+            "name": "Allow-https-redirect",
+            "properties": {
+              "priority": 170,
+              "protocol": "Tcp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "[parameters('homePublicIP')]",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationPortRange": "8843"
+            }
+          },
+          {
+            "name": "Allow-mobile-speedtest",
+            "properties": {
+              "priority": 180,
+              "protocol": "Tcp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "[parameters('homePublicIP')]",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationPortRange": "6789"
+            }
+          },
+          {
+            "name": "Allow-stun",
+            "properties": {
+              "priority": 190,
+              "protocol": "Udp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "[parameters('homePublicIP')]",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationPortRange": "3478"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2021-02-01",
+      "name": "[parameters('virtualNetworkName')]",
+      "location": "[variables('location')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[parameters('addressSpace')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnetName')]",
+            "properties": {
+              "addressPrefix": "[format('{0}.0/25', variables('addressPrefix24'))]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', 'Unifi-nsg')]"
+              },
+              "delegations": []
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', 'Unifi-nsg')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2021-02-01",
+      "name": "[variables('pipName')]",
+      "location": "[variables('location')]",
+      "sku": {
+        "name": "Standard"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Static"
+      }
+    },
+    {
+      "type": "Microsoft.Network/loadBalancers",
+      "apiVersion": "2021-02-01",
+      "name": "[variables('lbName')]",
+      "location": "[variables('location')]",
+      "sku": {
+        "name": "Standard",
+        "tier": "Regional"
+      },
+      "properties": {
+        "frontendIPConfigurations": [
+          {
+            "name": "PublicEndpoint",
+            "properties": {
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('pipName'))]"
+              }
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "name": "unificntr"
+          }
+        ],
+        "inboundNatRules": [
+          {
+            "name": "ssh",
+            "properties": {
+              "frontendIPConfiguration": "[variables('lbFrontEndRef')]",
+              "protocol": "Tcp",
+              "frontendPort": "[parameters('sshNatPort')]",
+              "backendPort": 22,
+              "enableFloatingIP": false
+            }
+          }
+        ],
+        "loadBalancingRules": [
+          {
+            "name": "ubntui",
+            "properties": {
+              "frontendIPConfiguration": "[variables('lbFrontEndRef')]",
+              "frontendPort": 8443,
+              "backendAddressPool": "[variables('lbBackEndRef')]",
+              "backendPort": 8443,
+              "protocol": "Tcp",
+              "probe": "[variables('lbProbeRef')]",
+              "enableFloatingIP": false
+            }
+          },
+          {
+            "name": "inform",
+            "properties": {
+              "frontendIPConfiguration": "[variables('lbFrontEndRef')]",
+              "frontendPort": 8080,
+              "backendAddressPool": "[variables('lbBackEndRef')]",
+              "backendPort": 8080,
+              "protocol": "Tcp",
+              "probe": "[variables('lbProbeRef')]",
+              "enableFloatingIP": false
+            }
+          }
+        ],
+        "probes": [
+          {
+            "name": "inform",
+            "properties": {
+              "port": 8080,
+              "protocol": "Tcp",
+              "intervalInSeconds": 15,
+              "numberOfProbes": 3
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', variables('pipName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2021-02-01",
+      "name": "[variables('networkInterfaceName')]",
+      "location": "[variables('location')]",
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "subnet": {
+                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', split(format('{0}/{1}', parameters('virtualNetworkName'), variables('subnetName')), '/')[0], split(format('{0}/{1}', parameters('virtualNetworkName'), variables('subnetName')), '/')[1])]"
+              },
+              "loadBalancerBackendAddressPools": [
+                "[variables('lbBackEndRef')]"
+              ],
+              "loadBalancerInboundNatRules": [
+                "[variables('lbNatRuleRef')]"
+              ],
+              "primary": true,
+              "privateIPAllocationMethod": "Dynamic"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/loadBalancers', variables('lbName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', parameters('virtualNetworkName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/availabilitySets",
+      "apiVersion": "2021-04-01",
+      "name": "[variables('availabilitySetName')]",
+      "location": "[variables('location')]",
+      "sku": {
+        "name": "Aligned"
+      },
+      "properties": {
+        "platformFaultDomainCount": 2,
+        "platformUpdateDomainCount": 5
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2021-04-01",
+      "name": "[variables('diagnosticsStorageAccountName')]",
+      "location": "[variables('location')]",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "StorageV2",
+      "properties": {
+        "supportsHttpsTrafficOnly": true,
+        "accessTier": "Hot",
+        "allowBlobPublicAccess": false,
+        "encryption": {
+          "keySource": "Microsoft.Storage",
+          "services": {
+            "blob": {
+              "enabled": true,
+              "keyType": "Account"
+            },
+            "file": {
+              "enabled": true,
+              "keyType": "Account"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2021-04-01",
+      "name": "[variables('backupStgAcc')]",
+      "location": "[variables('location')]",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "StorageV2",
+      "properties": {
+        "supportsHttpsTrafficOnly": true,
+        "accessTier": "Cool",
+        "allowBlobPublicAccess": false,
+        "encryption": {
+          "keySource": "Microsoft.Storage",
+          "services": {
+            "blob": {
+              "enabled": true,
+              "keyType": "Account"
+            },
+            "file": {
+              "enabled": true,
+              "keyType": "Account"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2021-04-01",
+      "name": "[parameters('vmName')]",
+      "location": "[variables('location')]",
+      "properties": {
+        "availabilitySet": {
+          "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('availabilitySetName'))]"
+        },
+        "hardwareProfile": {
+          "vmSize": "[parameters('vmSize')]"
+        },
+        "osProfile": {
+          "computerName": "[variables('computerName')]",
+          "adminUsername": "[parameters('adminUsername')]",
+          "linuxConfiguration": {
+            "disablePasswordAuthentication": true,
+            "provisionVMAgent": true,
+            "ssh": {
+              "publicKeys": [
+                {
+                  "keyData": "[parameters('adminPublicKey')]",
+                  "path": "[format('/home/{0}/.ssh/authorized_keys', parameters('adminUsername'))]"
+                }
+              ]
+            }
+          },
+          "customData": "[base64(format(variables('cloudInitFormat'), variables('backupStgAcc'), listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('backupStgAcc')), '2021-04-01').keys[0].value, string(variables('mountFields'))))]"
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('networkInterfaceName'))]",
+              "properties": {
+                "primary": true,
+                "deleteOption": "Delete"
+              }
+            }
+          ]
+        },
+        "storageProfile": {
+          "osDisk": {
+            "name": "[format('{0}-os', toLower(parameters('vmName')))]",
+            "caching": "ReadWrite",
+            "createOption": "FromImage",
+            "diskSizeGB": 32,
+            "managedDisk": {
+              "storageAccountType": "Premium_LRS"
+            },
+            "deleteOption": "Delete"
+          },
+          "imageReference": {
+            "publisher": "Canonical",
+            "offer": "0001-com-ubuntu-server-focal",
+            "sku": "20_04-lts-gen2",
+            "version": "latest"
+          }
+        },
+        "diagnosticsProfile": {
+          "bootDiagnostics": {
+            "enabled": true,
+            "storageUri": "[reference(resourceId('Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName'))).primaryEndpoints.blob]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/availabilitySets', variables('availabilitySetName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('backupStgAcc'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName'))]",
+        "[resourceId('Microsoft.Network/networkInterfaces', variables('networkInterfaceName'))]"
+      ]
+    }
+  ]
 }
