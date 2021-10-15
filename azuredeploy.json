@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.4.993.34462",
-      "templateHash": "9954783919761997680"
+      "version": "0.4.1007.54317",
+      "templateHash": "3384093872128876140"
     }
   },
   "parameters": {
@@ -342,7 +342,8 @@
               "backendPort": 8443,
               "protocol": "Tcp",
               "probe": "[variables('lbProbeRef')]",
-              "enableFloatingIP": false
+              "enableFloatingIP": false,
+              "disableOutboundSnat": true
             }
           },
           {
@@ -354,7 +355,72 @@
               "backendPort": 8080,
               "protocol": "Tcp",
               "probe": "[variables('lbProbeRef')]",
-              "enableFloatingIP": false
+              "enableFloatingIP": false,
+              "disableOutboundSnat": true
+            }
+          },
+          {
+            "name": "STUN",
+            "properties": {
+              "frontendIPConfiguration": "[variables('lbFrontEndRef')]",
+              "frontendPort": 3478,
+              "backendAddressPool": "[variables('lbBackEndRef')]",
+              "backendPort": 3478,
+              "protocol": "Udp",
+              "probe": "[variables('lbProbeRef')]",
+              "enableFloatingIP": false,
+              "disableOutboundSnat": true
+            }
+          },
+          {
+            "name": "UnifiMobile",
+            "properties": {
+              "frontendIPConfiguration": "[variables('lbFrontEndRef')]",
+              "frontendPort": 6789,
+              "backendAddressPool": "[variables('lbBackEndRef')]",
+              "backendPort": 6789,
+              "protocol": "Tcp",
+              "probe": "[variables('lbProbeRef')]",
+              "enableFloatingIP": false,
+              "disableOutboundSnat": true
+            }
+          },
+          {
+            "name": "HttpRedirect",
+            "properties": {
+              "frontendIPConfiguration": "[variables('lbFrontEndRef')]",
+              "frontendPort": 8880,
+              "backendAddressPool": "[variables('lbBackEndRef')]",
+              "backendPort": 8880,
+              "protocol": "Tcp",
+              "probe": "[variables('lbProbeRef')]",
+              "enableFloatingIP": false,
+              "disableOutboundSnat": true
+            }
+          },
+          {
+            "name": "HttpsRedirect",
+            "properties": {
+              "frontendIPConfiguration": "[variables('lbFrontEndRef')]",
+              "frontendPort": 8843,
+              "backendAddressPool": "[variables('lbBackEndRef')]",
+              "backendPort": 8843,
+              "protocol": "Tcp",
+              "probe": "[variables('lbProbeRef')]",
+              "enableFloatingIP": false,
+              "disableOutboundSnat": true
+            }
+          }
+        ],
+        "outboundRules": [
+          {
+            "name": "default",
+            "properties": {
+              "frontendIPConfigurations": [
+                "[variables('lbFrontEndRef')]"
+              ],
+              "backendAddressPool": "[variables('lbBackEndRef')]",
+              "protocol": "All"
             }
           }
         ],

@@ -279,6 +279,7 @@ resource lb 'Microsoft.Network/loadBalancers@2021-02-01' = {
           protocol: 'Tcp'
           probe: lbProbeRef
           enableFloatingIP: false
+          disableOutboundSnat: true
         }
       }
       {
@@ -291,6 +292,71 @@ resource lb 'Microsoft.Network/loadBalancers@2021-02-01' = {
           protocol: 'Tcp'
           probe: lbProbeRef
           enableFloatingIP: false
+          disableOutboundSnat: true
+        }
+      }
+      {
+        name: 'STUN'
+        properties: {
+          frontendIPConfiguration: lbFrontEndRef
+          frontendPort: 3478
+          backendAddressPool: lbBackEndRef
+          backendPort: 3478
+          protocol: 'Udp'
+          probe: lbProbeRef
+          enableFloatingIP: false
+          disableOutboundSnat: true
+        }
+      }
+      {
+        name: 'UnifiMobile'
+        properties: {
+          frontendIPConfiguration: lbFrontEndRef
+          frontendPort: 6789
+          backendAddressPool: lbBackEndRef
+          backendPort: 6789
+          protocol: 'Tcp'
+          probe: lbProbeRef
+          enableFloatingIP: false
+          disableOutboundSnat: true
+        }
+      }
+      {
+        name: 'HttpRedirect'
+        properties: {
+          frontendIPConfiguration: lbFrontEndRef
+          frontendPort: 8880
+          backendAddressPool: lbBackEndRef
+          backendPort: 8880
+          protocol: 'Tcp'
+          probe: lbProbeRef
+          enableFloatingIP: false
+          disableOutboundSnat: true
+        }
+      }
+      {
+        name: 'HttpsRedirect'
+        properties: {
+          frontendIPConfiguration: lbFrontEndRef
+          frontendPort: 8843
+          backendAddressPool: lbBackEndRef
+          backendPort: 8843
+          protocol: 'Tcp'
+          probe: lbProbeRef
+          enableFloatingIP: false
+          disableOutboundSnat: true
+        }
+      }
+    ]
+    outboundRules: [
+      {
+        name: 'default'
+        properties: {
+          frontendIPConfigurations: [
+            lbFrontEndRef
+          ]
+          backendAddressPool: lbBackEndRef
+          protocol: 'All'
         }
       }
     ]
