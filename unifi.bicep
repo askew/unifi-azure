@@ -31,7 +31,8 @@ param homePublicIP string
 @description('The port number to expose for SSH access to the VM. Will be NAT\'d to 22.')
 param sshNatPort int = 22
 
-var location = resourceGroup().location
+@description('The Azure region to deploy resources to.')
+param location string = resourceGroup().location
 
 var suffix = take(uniqueString(resourceGroup().id), 4)
 var computerName = toUpper(vmName)
@@ -41,7 +42,6 @@ var addressPrefix24 = '${addressSpaceParts[0]}.${addressSpaceParts[1]}.${address
 var subnetName = 'unifi'
 var networkInterfaceName = '${vmName}-nic'
 var availabilitySetName = '${vmName}-as'
-var diagnosticsStorageAccountName = 'diag${suffix}'
 var backupStgAcc = empty(backupStorageAccountName) ? 'backup${suffix}' : backupStorageAccountName
 var pipName = '${vmName}-pip'
 var lbName = '${vmName}-lb'
@@ -53,9 +53,9 @@ var mountFields = [
   '0'
   '0'
 ]
-var cloudInitFormat = 'SET BY SCRIPT'
+var cloudInitFormat = loadTextContent('cloud-config.yml')
 
-resource nsg 'Microsoft.Network/networkSecurityGroups@2021-02-01' = {
+resource nsg 'Microsoft.Network/networkSecurityGroups@2023-06-01' = {
   name: 'Unifi-nsg'
   location: location
   properties: {
@@ -181,7 +181,7 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2021-02-01' = {
   }
 }
 
-resource vnet 'Microsoft.Network/virtualNetworks@2021-02-01' = {
+resource vnet 'Microsoft.Network/virtualNetworks@2023-06-01' = {
   name: virtualNetworkName
   location: location
   properties: {
@@ -198,18 +198,26 @@ resource vnet 'Microsoft.Network/virtualNetworks@2021-02-01' = {
           networkSecurityGroup: {
             id: nsg.id
           }
-          delegations: []
+          serviceEndpoints: [
+            {
+              service: 'Microsoft.Storage'
+              locations: [
+                'uksouth'
+                'ukwest'
+              ]
+            }
+          ]
         }
       }
     ]
   }
+
+  resource subnet 'subnets' existing = {
+    name: subnetName
+  }
 }
 
-resource subnet 'Microsoft.Network/virtualNetworks/subnets@2021-02-01' existing = {
-  name: '${virtualNetworkName}/${subnetName}'
-}
-
-resource pip 'Microsoft.Network/publicIPAddresses@2021-02-01' = {
+resource pip 'Microsoft.Network/publicIPAddresses@2023-06-01' = {
   name: pipName
   location: location
   sku: {
@@ -233,7 +241,7 @@ var lbNatRuleRef = {
   id: resourceId('Microsoft.Network/loadBalancers/inboundNatRules', lbName, 'ssh')
 }
 
-resource lb 'Microsoft.Network/loadBalancers@2021-02-01' = {
+resource lb 'Microsoft.Network/loadBalancers@2023-06-01' = {
   name: lbName
   location: location
   sku: {
@@ -273,7 +281,7 @@ resource lb 'Microsoft.Network/loadBalancers@2021-02-01' = {
         name: 'ubntui'
         properties: {
           frontendIPConfiguration: lbFrontEndRef
-          frontendPort: 8443
+          frontendPort: 443
           backendAddressPool: lbBackEndRef
           backendPort: 8443
           protocol: 'Tcp'
@@ -374,11 +382,10 @@ resource lb 'Microsoft.Network/loadBalancers@2021-02-01' = {
   }
 }
 
-resource nic 'Microsoft.Network/networkInterfaces@2021-02-01' = {
+resource nic 'Microsoft.Network/networkInterfaces@2023-06-01' = {
   name: networkInterfaceName
   location: location
   dependsOn: [
-    vnet
     lb
   ]
   properties: {
@@ -387,7 +394,7 @@ resource nic 'Microsoft.Network/networkInterfaces@2021-02-01' = {
         name: 'ipconfig1'
         properties: {
           subnet: {
-            id: subnet.id
+            id: vnet::subnet.id
           }
           loadBalancerBackendAddressPools: [
             lbBackEndRef
@@ -403,7 +410,7 @@ resource nic 'Microsoft.Network/networkInterfaces@2021-02-01' = {
   }
 }
 
-resource as 'Microsoft.Compute/availabilitySets@2021-04-01' = {
+resource availabilitySet 'Microsoft.Compute/availabilitySets@2023-09-01' = {
   name: availabilitySetName
   location: location
   sku: {
@@ -415,35 +422,7 @@ resource as 'Microsoft.Compute/availabilitySets@2021-04-01' = {
   }
 }
 
-resource diagnosticStorage 'Microsoft.Storage/storageAccounts@2021-04-01' = {
-  name: diagnosticsStorageAccountName
-  location: location
-  sku: {
-    name: 'Standard_LRS'
-  }
-  kind: 'StorageV2'
-  properties: {
-    supportsHttpsTrafficOnly: true
-    accessTier: 'Hot'
-    allowBlobPublicAccess: false
-    encryption: {
-      keySource: 'Microsoft.Storage'
-      services: {
-        blob: {
-          enabled: true
-          keyType: 'Account'
-        }
-        file: {
-          enabled: true
-          keyType: 'Account'
-        }
-      }
-    }
-  }
-}
-
-
-resource backupStorage 'Microsoft.Storage/storageAccounts@2021-04-01' = {
+resource backupStorage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name: backupStgAcc
   location: location
   sku: {
@@ -454,6 +433,7 @@ resource backupStorage 'Microsoft.Storage/storageAccounts@2021-04-01' = {
     supportsHttpsTrafficOnly: true
     accessTier: 'Cool'
     allowBlobPublicAccess: false
+    publicNetworkAccess: 'Enabled'
     encryption: {
       keySource: 'Microsoft.Storage'
       services: {
@@ -467,22 +447,55 @@ resource backupStorage 'Microsoft.Storage/storageAccounts@2021-04-01' = {
         }
       }
     }
+    networkAcls: {
+      bypass: 'AzureServices'
+      defaultAction: 'Deny'
+      ipRules: [
+        {
+          value: homePublicIP
+          action: 'Allow'
+        }
+      ]
+      virtualNetworkRules: [
+        {
+          id: vnet::subnet.id
+          action: 'Allow'
+        }
+      ]
+    }
+  }
+
+  resource blob 'blobServices' = {
+    name: 'default'
+    properties: {
+      deleteRetentionPolicy: {
+        enabled: false
+      }
+      containerDeleteRetentionPolicy: {
+        enabled: false
+      }
+    }
   }
 
   resource file 'fileServices' = {
     name: 'default'
+    properties: {
+      shareDeleteRetentionPolicy: {
+        enabled: false
+      }
+    }
     resource backupShare 'shares' = {
       name: 'backup'
     }
   }
 }
 
-resource unifivm 'Microsoft.Compute/virtualMachines@2021-04-01' = {
+resource unifivm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
   name: vmName
   location: location
   properties: {
     availabilitySet: {
-      id: as.id
+      id: availabilitySet.id
     }
     hardwareProfile: {
       vmSize: vmSize
@@ -502,7 +515,7 @@ resource unifivm 'Microsoft.Compute/virtualMachines@2021-04-01' = {
           ]
         }
       }
-      customData: base64(format(cloudInitFormat, backupStgAcc, listKeys(backupStorage.id, '2021-04-01').keys[0].value, string(mountFields)))
+      customData: base64(format(cloudInitFormat, backupStgAcc, backupStorage.listKeys().keys[0].value, string(mountFields)))
     }
     networkProfile: {
       networkInterfaces: [
@@ -514,6 +527,13 @@ resource unifivm 'Microsoft.Compute/virtualMachines@2021-04-01' = {
           }
         }
       ]
+    }
+    securityProfile: {
+      securityType: 'TrustedLaunch'
+      uefiSettings: {
+        secureBootEnabled: true
+        vTpmEnabled: true
+      }
     }
     storageProfile: {
       osDisk: {
@@ -527,16 +547,15 @@ resource unifivm 'Microsoft.Compute/virtualMachines@2021-04-01' = {
         deleteOption: 'Delete'
       }
       imageReference: {
-        publisher: 'Canonical'
-        offer: '0001-com-ubuntu-server-focal'
-        sku: '20_04-lts-gen2'
+        publisher: 'canonical'
+        offer: '0001-com-ubuntu-minimal-jammy'
+        sku: 'minimal-22_04-lts-gen2'
         version: 'latest'
       }
     }
     diagnosticsProfile: {
       bootDiagnostics: {
         enabled: true
-        storageUri: diagnosticStorage.properties.primaryEndpoints.blob
       }
     }
   }

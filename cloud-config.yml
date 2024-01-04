@@ -4,34 +4,62 @@ timezone: Europe/London
 
 apt:
   sources:
-    100-ubnt-unifi:
+    unifi:
       keyid: 06E85760C0A52C50
       keyserver: keyserver.ubuntu.com
       source: "deb https://www.ui.com/downloads/unifi/debian stable ubiquiti"
-    mongodb-org-3.6:
-      keyid: 58712A2291FA4AD5
-      source: "deb [arch=amd64] https://repo.mongodb.org/apt/ubuntu bionic/mongodb-org/3.6 multiverse"
+    mongodb-org-4.4:
+      keyid: 20691EEC35216C63CAF66CE1656408E390CFB1F5
+      source: "deb [arch=amd64] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 multiverse"
 
 packages:
+- alsa-topology-conf
+- alsa-ucm-conf
 - apt-transport-https
 - binutils
 - ca-certificates
 - ca-certificates-java
+- fontconfig-config
+- fonts-dejavu-core
 - java-common
-- jsvc
+- libasound2
+- libasound2-data
+- libavahi-client3
+- libavahi-common-data
+- libavahi-common3
 - libcommons-daemon-java
+- libcups2
+- libfontconfig1
+- libgraphite2-3
+- libharfbuzz0b
+- libjpeg-turbo8
+- libjpeg8
+- liblcms2-2
+- libnspr4
+- libnss3
+- libpcsclite1
+- logrotate
 - mongodb-org-server
-- openjdk-8-jre-headless
+- openjdk-17-jre-headless
 - unifi
 
 package_update: true
 package_upgrade: true
-package_reboot_if_required: true
+package_reboot_if_required: false
 
 write_files:
-- encoding: gzip
-  content: !!binary |
-    SETUPSCRIPT
+- content: |
+    #!/bin/bash
+
+    if [ ! -d '/azure/autobackup' ]; then
+        mkdir /azure/autobackup
+    fi
+    if [ ! -L '/var/lib/unifi/backup' -a -d '/var/lib/unifi/backup' ]; then
+        rm -rf /var/lib/unifi/backup
+        cd /var/lib/unifi/
+        ln -s /azure backup
+        chown -h unifi:unifi backup
+    fi
   owner: root:root
   path: /root/unifi-setup.sh
   permissions: '0744'
@@ -44,6 +72,11 @@ write_files:
 
 bootcmd:
 - if [ ! -d '/azure' ]; then mkdir /azure; fi
+- |
+  curl -sSfLO http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb
+  dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
+  rm -f libssl1.1_1.1.1f-1ubuntu2_amd64.deb
+
 runcmd:
 - [ bash, /root/unifi-setup.sh ]
 
